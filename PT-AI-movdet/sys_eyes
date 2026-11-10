@@ -1,0 +1,140 @@
+
+import cv2
+import mediapipe as mp
+import os
+
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+# Model path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "pose_landmarker_full.task")
+
+# Check model
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
+
+# Configure MediaPipe
+base_options = python.BaseOptions(
+    model_asset_path=MODEL_PATH
+)
+
+options = vision.PoseLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.VIDEO,
+    num_poses=1,
+    min_pose_detection_confidence=0.5,
+    min_pose_presence_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
+detector = vision.PoseLandmarker.create_from_options(options)
+
+# Camera
+cap = cv2.VideoCapture(0)
+
+GREEN = (0, 255, 0)
+
+# Visual settings
+JOINT_RADIUS = 5
+NOSE_RADIUS = 7
+LINE_THICKNESS = 1
+VISIBILITY_THRESHOLD = 0.5
+
+# Pose connections
+connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
+
+# Face landmark IDs: 0-10
+FACE_LANDMARKS = set(range(0, 11))
+
+# Nose landmark
+NOSE_ID = 0
+
+timestamp = 0
+
+while cap.isOpened():
+
+    success, frame = cap.read()
+
+    if not success:
+        break
+
+    frame = cv2.flip(frame, 1)
+
+    height, width, _ = frame.shape
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb
+    )
+
+    timestamp += 33
+
+    results = detector.detect_for_video(mp_image, timestamp)
+
+    if results.pose_landmarks:
+
+        for landmarks in results.pose_landmarks:
+
+            # Draw thin skeleton lines
+            for connection in connections:
+
+                start_id = connection.start
+                end_id = connection.end
+
+                start = landmarks[start_id]
+                end = landmarks[end_id]
+
+                # Ignore face connections
+                if start_id in FACE_LANDMARKS or end_id in FACE_LANDMARKS:
+                    continue
+
+                if (start.visibility > VISIBILITY_THRESHOLD and
+                    end.visibility > VISIBILITY_THRESHOLD):
+
+                    x1 = int(start.x * width)
+                    y1 = int(start.y * height)
+
+                    x2 = int(end.x * width)
+                    y2 = int(end.y * height)
+
+                    cv2.line(
+                        frame,
+                        (x1, y1),
+                        (x2, y2),
+                        GREEN,
+                        LINE_THICKNESS
+                    )
+
+            # Draw body joints
+            for landmark_id, landmark in enumerate(landmarks):
+
+                # Hide all face points except nose
+                if landmark_id in FACE_LANDMARKS and landmark_id != NOSE_ID:
+                    continue
+
+                if landmark.visibility > VISIBILITY_THRESHOLD:
+
+                    x = int(landmark.x * width)
+                    y = int(landmark.y * height)
+
+                    radius = NOSE_RADIUS if landmark_id == NOSE_ID else JOINT_RADIUS
+
+                    cv2.circle(
+                        frame,
+                        (x, y),
+                        radius,
+                        GREEN,
+                        -1
+                    )
+
+    cv2.imshow("AI PT - Body Detection", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+detector.close()
+cv2.destroyAllWindows()
